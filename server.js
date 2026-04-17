@@ -180,7 +180,3 @@ io.on("connection", (socket) => {
 server.listen(PORT, () => {
   console.log(`🚀 Joinly server running on ${PORT}`);
 });
-
-server.listen(PORT, () => {
-  console.log(`🚀 Joinly server running on ${PORT}`);
-});
