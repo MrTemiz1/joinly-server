@@ -12,71 +12,101 @@ const io = new Server(server, {
 
 const PORT = process.env.PORT || 3000;
 
-// static frontend
 app.use(express.static(path.join(__dirname, "public")));
 
 app.get("/", (req, res) => {
   res.sendFile(path.join(__dirname, "public", "joinly.html"));
 });
 
-// rooms memory
+// ======================
+// ROOMS STATE
+// ======================
 const rooms = {};
 
+// ======================
+// SOCKET.IO
+// ======================
 io.on("connection", (socket) => {
 
-  socket.data.roomId = null;
-  socket.data.name = null;
-
-  // =========================
-  // JOIN ROOM (FIXED + SAFE)
-  // =========================
   socket.on("join-room", ({ roomId, name, micOn, camOn }) => {
+    if (!rooms[roomId]) {
+      rooms[roomId] = {
+        users: {}
+      };
+    }
 
-    if (!roomId) return;
+    const room = rooms[roomId];
 
     socket.join(roomId);
 
-    socket.data.roomId = roomId;
-    socket.data.name = name;
-
-    if (!rooms[roomId]) rooms[roomId] = {};
-
-    rooms[roomId][socket.id] = {
+    room.users[socket.id] = {
+      id: socket.id,
       name,
       micOn: micOn ?? true,
       camOn: camOn ?? true
     };
 
-    // peers list
-    const peers = Object.entries(rooms[roomId])
-      .filter(([id]) => id !== socket.id)
-      .map(([id, data]) => ({
-        id,
-        name: data.name
-      }));
+    // 👑 ilk kişi host
+    const isHost = Object.keys(room.users).length === 1;
 
-    // send joined (frontend expects this)
+    // mevcut peer list
+    const peers = Object.values(room.users).filter(u => u.id !== socket.id);
+
+    // kullanıcıya kendi bilgisi + mevcut kişiler
     socket.emit("joined", {
-      isHost: peers.length === 0,
-      peers
+      isHost,
+      peers: peers.map(p => ({
+        id: p.id,
+        name: p.name
+      }))
     });
 
-    // notify others
+    // diğerlerine yeni kişi
     socket.to(roomId).emit("peer-joined", {
       id: socket.id,
       name
     });
+
+    // herkesin listesi
+    io.to(roomId).emit("peer-list",
+      Object.values(room.users)
+    );
+
+    // host bilgisi
+    if (isHost) {
+      socket.emit("you-are-host");
+    }
   });
 
-  // =========================
-  // MEDIA STATE SYNC
-  // =========================
-  socket.on("media-state", ({ roomId, micOn, camOn }) => {
-    if (!rooms[roomId]) return;
-    if (!rooms[roomId][socket.id]) return;
+  // ======================
+  // ADMIT / WAITING (frontend uyum)
+  // ======================
+  socket.on("admit-user", ({ roomId, targetId, name }) => {
+    io.to(targetId).emit("joined", {
+      isHost: false,
+      peers: []
+    });
+  });
 
-    rooms[roomId][socket.id].micOn = micOn;
-    rooms[roomId][socket.id].camOn = camOn;
+  socket.on("deny-user", ({ roomId, targetId }) => {
+    io.to(targetId).emit("denied");
+  });
+
+  socket.on("leave-room", ({ roomId }) => {
+    socket.leave(roomId);
+  });
+
+  // ======================
+  // MEDIA STATE
+  // ======================
+  socket.on("media-state", ({ roomId, micOn, camOn }) => {
+    const room = rooms[roomId];
+    if (!room) return;
+
+    if (room.users[socket.id]) {
+      room.users[socket.id].micOn = micOn;
+      room.users[socket.id].camOn = camOn;
+    }
 
     socket.to(roomId).emit("peer-media-state", {
       id: socket.id,
@@ -85,26 +115,21 @@ io.on("connection", (socket) => {
     });
   });
 
-  // =========================
+  // ======================
   // CHAT
-  // =========================
+  // ======================
   socket.on("chat-message", ({ roomId, text, name }) => {
-    if (!roomId) return;
-
-    socket.to(roomId).emit("chat-message", {
+    io.to(roomId).emit("chat-message", {
       from: socket.id,
       name,
       text,
-      time: new Date().toLocaleTimeString("tr-TR", {
-        hour: "2-digit",
-        minute: "2-digit"
-      })
+      time: new Date().toLocaleTimeString().slice(0, 5)
     });
   });
 
-  // =========================
-  // WEBRTC SIGNALING (UNCHANGED)
-  // =========================
+  // ======================
+  // WEBRTC SIGNALING
+  // ======================
   socket.on("offer", ({ to, sdp }) => {
     io.to(to).emit("offer", {
       from: socket.id,
@@ -126,46 +151,28 @@ io.on("connection", (socket) => {
     });
   });
 
-  // =========================
-  // SCREEN SHARE
-  // =========================
-  socket.on("screen-share-started", ({ roomId }) => {
-    socket.to(roomId).emit("peer-screen-share", {
-      id: socket.id,
-      active: true
-    });
-  });
-
-  socket.on("screen-share-stopped", ({ roomId }) => {
-    socket.to(roomId).emit("peer-screen-share", {
-      id: socket.id,
-      active: false
-    });
-  });
-
-  // =========================
-  // DISCONNECT (FIXED SAFE)
-  // =========================
+  // ======================
+  // DISCONNECT
+  // ======================
   socket.on("disconnect", () => {
+    for (const roomId in rooms) {
+      const room = rooms[roomId];
 
-    const roomId = socket.data.roomId;
-    if (!roomId) return;
+      if (room.users[socket.id]) {
+        delete room.users[socket.id];
 
-    if (rooms[roomId]) {
+        socket.to(roomId).emit("peer-left", {
+          id: socket.id
+        });
 
-      delete rooms[roomId][socket.id];
-
-      socket.to(roomId).emit("peer-left", {
-        id: socket.id
-      });
-
-      if (Object.keys(rooms[roomId]).length === 0) {
-        delete rooms[roomId];
+        if (Object.keys(room.users).length === 0) {
+          delete rooms[roomId];
+        }
       }
     }
   });
 });
 
 server.listen(PORT, () => {
-  console.log(`🚀 Joinly running on port ${PORT}`);
+  console.log(`🚀 Joinly server running on ${PORT}`);
 });
