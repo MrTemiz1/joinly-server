@@ -356,17 +356,16 @@ h1,h2,h3,h4{font-family:'Syne',sans-serif}
 <div class="toast" id="toast"></div>
 
 <script>
-// ═══════════════════════════════════════
+═══════════════════════════════════════
 //  CONFIG
 // ═══════════════════════════════════════
-const SERVER_URL = window.location.origin;
+const SERVER_URL = "https://joinly-server.onrender.com";
 
 const ICE_SERVERS = [
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun1.l.google.com:19302' },
-  { urls: 'stun:stun2.l.google.com:19302' },
-  { urls: 'stun:stun3.l.google.com:19302' },
-  { urls: 'stun:stun4.l.google.com:19302' },
+  // Kendi TURN sunucun varsa ekle:
+  // { urls:'turn:your-turn.com:3478', username:'user', credential:'pass' }
 ];
 
 // ═══════════════════════════════════════
@@ -404,7 +403,7 @@ function connectSocket(cb) {
   S.socket.on('joined', async ({ isHost, peers }) => {
     S.isHost = isHost;
     hideOverlay();
-    showEnterBtn();
+    if (isHost) showEnterBtn();
     for (const p of peers) await makePeer(p.id, p.name, true);
   });
 
@@ -503,19 +502,8 @@ async function makePeer(peerId, name, initiator) {
     if (e.candidate) S.socket.emit('ice-candidate', { to:peerId, candidate:e.candidate });
   };
 
-  pc.onnegotiationneeded = async () => {
-    try {
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      S.socket.emit('offer', { to:peerId, sdp:pc.localDescription });
-    } catch (err) {
-      console.error("Negotiation error:", err);
-    }
-  };
-
   pc.onconnectionstatechange = () => {
     const s = pc.connectionState;
-    console.log(`Peer ${peerId} state: ${s}`);
     const bars = document.getElementById('conn-bars');
     const label = document.getElementById('conn-label');
     if (!bars) return;
@@ -523,6 +511,12 @@ async function makePeer(peerId, name, initiator) {
     else if (s==='connecting')             { bars.className='conn-bars conn-medium'; label.textContent='Bağlanıyor'; }
     else if (s==='failed'||s==='disconnected') { bars.className='conn-bars conn-bad'; label.textContent='Zayıf'; }
   };
+
+  if (initiator) {
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    S.socket.emit('offer', { to:peerId, sdp:pc.localDescription });
+  }
 
   renderGrid(); renderParticipants();
 }
@@ -590,24 +584,10 @@ function shareInstagram() { copyMeetingId(); showToast('ID kopyalandı — Insta
 // ═══════════════════════════════════════
 //  WAITING
 // ═══════════════════════════════════════
-async function goToWaiting() {
+function goToWaiting() {
   document.getElementById('waiting-mid').textContent = S.meetingId;
   document.getElementById('waiting-avatar').textContent = S.myName.charAt(0).toUpperCase();
   showScreen('waiting');
-
-  if (!S.localStream) {
-    try {
-      S.localStream = await navigator.mediaDevices.getUserMedia({ video: S.camOn, audio: true });
-      const vid = document.getElementById('preview-vid');
-      if (vid) {
-        vid.srcObject = S.localStream;
-        document.getElementById('preview-ph').style.display = 'none';
-      }
-    } catch (e) {
-      console.error("Medya erişim hatası:", e);
-      showToast('Kamera/Mikrofon izni alınamadı!');
-    }
-  }
 
   connectSocket(() => {
     S.socket.emit('join-room', {
@@ -616,14 +596,15 @@ async function goToWaiting() {
       micOn: S.micOn,
       camOn: S.camOn
     });
+
+    // 👇 direkt odaya geç
+    enterRoom();
   });
 }
 
 function showEnterBtn() {
-  const btn = document.getElementById('enter-btn');
-  if (btn) btn.style.display = 'block';
-  const msg = document.getElementById('waiting-msg');
-  if (msg) msg.textContent = 'Hazır!';
+  document.getElementById('enter-btn').style.display = 'block';
+  document.getElementById('waiting-msg').textContent = 'Hazır!';
 }
 
 function addAdmitCard(socketId, name) {
@@ -699,6 +680,21 @@ function leaveWaiting() {
 //  ENTER ROOM
 // ═══════════════════════════════════════
 async function enterRoom() {
+  if (!S.localStream) {
+    try {
+      S.localStream = await navigator.mediaDevices.getUserMedia({ video:S.camOn, audio:true });
+    } catch {
+      try { S.localStream = await navigator.mediaDevices.getUserMedia({ audio:true }); }
+      catch { showToast('Medya izni alınamadı, devam ediliyor...'); }
+    }
+  }
+  // Yerel stream'i mevcut peer bağlantılarına ekle (joining peer senaryosu)
+  Object.values(S.peers).forEach(({ pc }) => {
+    S.localStream?.getTracks().forEach(t => {
+      if (!pc.getSenders().find(s=>s.track?.kind===t.kind)) pc.addTrack(t, S.localStream);
+    });
+  });
+
   showScreen('room');
 
   // Timer
