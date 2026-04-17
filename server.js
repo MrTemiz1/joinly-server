@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════
-// Joinly Server (Render + Socket.IO + WebRTC)
+// Joinly Server (FIXED - Frontend Compatible)
 // ═══════════════════════════════════════════════
 
 const express = require("express");
@@ -9,90 +9,119 @@ const path = require("path");
 
 const app = express();
 const server = http.createServer(app);
+
 const io = new Server(server, {
   cors: { origin: "*" }
 });
 
-// 🔥 PORT (Render uyumlu)
 const PORT = process.env.PORT || 3000;
 
-// 📁 Frontend serve et
+// frontend serve
 app.use(express.static(path.join(__dirname, "public")));
 
-// 🏠 Ana sayfa
 app.get("/", (req, res) => {
   res.sendFile(path.join(__dirname, "public", "joinly.html"));
 });
 
-// ======================
-// ROOMS
-// ======================
+// rooms memory
 const rooms = {};
 
-// ======================
+// ═══════════════════════════════════════════════
 // SOCKET
-// ======================
+// ═══════════════════════════════════════════════
 io.on("connection", (socket) => {
-  let currentRoom = null;
 
-  // 🆕 ODA OLUŞTUR
-  socket.on("create-room", ({ roomId, name }) => {
-    if (rooms[roomId]) {
-      socket.emit("error", "Room already exists");
-      return;
-    }
+  socket.data.roomId = null;
+  socket.data.name = null;
 
-    rooms[roomId] = { users: {} };
+  // ======================
+  // JOIN ROOM (FIXED)
+  // ======================
+  socket.on("join-room", ({ roomId, name, micOn, camOn }) => {
 
-    currentRoom = roomId;
-    rooms[roomId].users[socket.id] = name;
-
-    socket.join(roomId);
-
-    socket.emit("room-created", roomId);
-
-    io.to(roomId).emit("room-users", rooms[roomId].users);
-  });
-
-  // 🚪 ODAYA KATIL
-  socket.on("join-room", ({ roomId, name }) => {
     if (!rooms[roomId]) {
-      socket.emit("error", "Room not found");
-      return;
+      rooms[roomId] = {};
     }
-
-    currentRoom = roomId;
-
-    rooms[roomId].users[socket.id] = name;
 
     socket.join(roomId);
 
-    // odadakilere bildir
-    socket.to(roomId).emit("user-joined", {
+    socket.data.roomId = roomId;
+    socket.data.name = name;
+
+    rooms[roomId][socket.id] = {
+      name,
+      micOn: micOn ?? true,
+      camOn: camOn ?? true
+    };
+
+    // existing peers
+    const peers = Object.entries(rooms[roomId])
+      .filter(([id]) => id !== socket.id)
+      .map(([id, data]) => ({
+        id,
+        name: data.name
+      }));
+
+    // send joined (FRONTEND EXPECTS THIS)
+    socket.emit("joined", {
+      isHost: peers.length === 0,
+      peers
+    });
+
+    // notify others (FRONTEND EXPECTS peer-joined)
+    socket.to(roomId).emit("peer-joined", {
       id: socket.id,
       name
     });
-
-    // kullanıcıya oda bilgisi
-    socket.emit("room-users", rooms[roomId].users);
   });
 
-  // 💬 mesaj
-  socket.on("message", ({ roomId, msg, name }) => {
-    io.to(roomId).emit("message", {
+  // ======================
+  // MEDIA STATE
+  // ======================
+  socket.on("media-state", ({ roomId, micOn, camOn }) => {
+    if (!rooms[roomId]) return;
+    if (!rooms[roomId][socket.id]) return;
+
+    rooms[roomId][socket.id].micOn = micOn;
+    rooms[roomId][socket.id].camOn = camOn;
+
+    socket.to(roomId).emit("peer-media-state", {
       id: socket.id,
-      name,
-      msg
+      micOn,
+      camOn
     });
   });
 
-  // 🎥 WebRTC signal
+  // ======================
+  // CHAT
+  // ======================
+  socket.on("chat-message", ({ roomId, text, name }) => {
+    socket.to(roomId).emit("chat-message", {
+      from: socket.id,
+      name,
+      text,
+      time: new Date().toLocaleTimeString("tr-TR", {
+        hour: "2-digit",
+        minute: "2-digit"
+      })
+    });
+  });
+
+  // ======================
+  // WEBRTC SIGNALING
+  // ======================
   socket.on("offer", ({ to, sdp }) => {
-    io.to(to).emit("offer", { from: socket.id, sdp });
+    io.to(to).emit("offer", {
+      from: socket.id,
+      sdp
+    });
   });
 
   socket.on("answer", ({ to, sdp }) => {
-    io.to(to).emit("answer", { from: socket.id, sdp });
+    io.to(to).emit("answer", {
+      from: socket.id,
+      sdp
+    });
   });
 
   socket.on("ice-candidate", ({ to, candidate }) => {
@@ -102,26 +131,48 @@ io.on("connection", (socket) => {
     });
   });
 
-  // ❌ disconnect
+  // ======================
+  // SCREEN SHARE EVENTS
+  // ======================
+  socket.on("screen-share-started", ({ roomId }) => {
+    socket.to(roomId).emit("peer-screen-share", {
+      id: socket.id,
+      active: true
+    });
+  });
+
+  socket.on("screen-share-stopped", ({ roomId }) => {
+    socket.to(roomId).emit("peer-screen-share", {
+      id: socket.id,
+      active: false
+    });
+  });
+
+  // ======================
+  // DISCONNECT (FIXED)
+  // ======================
   socket.on("disconnect", () => {
-    if (!currentRoom) return;
 
-    const room = rooms[currentRoom];
-    if (!room) return;
+    const roomId = socket.data.roomId;
+    if (!roomId) return;
 
-    delete room.users[socket.id];
+    if (rooms[roomId]) {
+      delete rooms[roomId][socket.id];
 
-    socket.to(currentRoom).emit("user-left", socket.id);
+      socket.to(roomId).emit("peer-left", {
+        id: socket.id
+      });
 
-    if (Object.keys(room.users).length === 0) {
-      delete rooms[currentRoom];
+      if (Object.keys(rooms[roomId]).length === 0) {
+        delete rooms[roomId];
+      }
     }
   });
 });
 
-// ======================
-// START SERVER
-// ======================
+// ═══════════════════════════════════════════════
+// START
+// ═══════════════════════════════════════════════
 server.listen(PORT, () => {
   console.log(`🚀 Joinly running on port ${PORT}`);
 });
