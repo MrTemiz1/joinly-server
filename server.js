@@ -1,7 +1,3 @@
-// ═══════════════════════════════════════════════
-// Joinly Server (FIXED - Frontend Compatible)
-// ═══════════════════════════════════════════════
-
 const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
@@ -16,7 +12,7 @@ const io = new Server(server, {
 
 const PORT = process.env.PORT || 3000;
 
-// frontend serve
+// static frontend
 app.use(express.static(path.join(__dirname, "public")));
 
 app.get("/", (req, res) => {
@@ -26,27 +22,24 @@ app.get("/", (req, res) => {
 // rooms memory
 const rooms = {};
 
-// ═══════════════════════════════════════════════
-// SOCKET
-// ═══════════════════════════════════════════════
 io.on("connection", (socket) => {
 
   socket.data.roomId = null;
   socket.data.name = null;
 
-  // ======================
-  // JOIN ROOM (FIXED)
-  // ======================
+  // =========================
+  // JOIN ROOM (FIXED + SAFE)
+  // =========================
   socket.on("join-room", ({ roomId, name, micOn, camOn }) => {
 
-    if (!rooms[roomId]) {
-      rooms[roomId] = {};
-    }
+    if (!roomId) return;
 
     socket.join(roomId);
 
     socket.data.roomId = roomId;
     socket.data.name = name;
+
+    if (!rooms[roomId]) rooms[roomId] = {};
 
     rooms[roomId][socket.id] = {
       name,
@@ -54,7 +47,7 @@ io.on("connection", (socket) => {
       camOn: camOn ?? true
     };
 
-    // existing peers
+    // peers list
     const peers = Object.entries(rooms[roomId])
       .filter(([id]) => id !== socket.id)
       .map(([id, data]) => ({
@@ -62,22 +55,22 @@ io.on("connection", (socket) => {
         name: data.name
       }));
 
-    // send joined (FRONTEND EXPECTS THIS)
+    // send joined (frontend expects this)
     socket.emit("joined", {
       isHost: peers.length === 0,
       peers
     });
 
-    // notify others (FRONTEND EXPECTS peer-joined)
+    // notify others
     socket.to(roomId).emit("peer-joined", {
       id: socket.id,
       name
     });
   });
 
-  // ======================
-  // MEDIA STATE
-  // ======================
+  // =========================
+  // MEDIA STATE SYNC
+  // =========================
   socket.on("media-state", ({ roomId, micOn, camOn }) => {
     if (!rooms[roomId]) return;
     if (!rooms[roomId][socket.id]) return;
@@ -92,10 +85,12 @@ io.on("connection", (socket) => {
     });
   });
 
-  // ======================
+  // =========================
   // CHAT
-  // ======================
+  // =========================
   socket.on("chat-message", ({ roomId, text, name }) => {
+    if (!roomId) return;
+
     socket.to(roomId).emit("chat-message", {
       from: socket.id,
       name,
@@ -107,9 +102,9 @@ io.on("connection", (socket) => {
     });
   });
 
-  // ======================
-  // WEBRTC SIGNALING
-  // ======================
+  // =========================
+  // WEBRTC SIGNALING (UNCHANGED)
+  // =========================
   socket.on("offer", ({ to, sdp }) => {
     io.to(to).emit("offer", {
       from: socket.id,
@@ -131,9 +126,9 @@ io.on("connection", (socket) => {
     });
   });
 
-  // ======================
-  // SCREEN SHARE EVENTS
-  // ======================
+  // =========================
+  // SCREEN SHARE
+  // =========================
   socket.on("screen-share-started", ({ roomId }) => {
     socket.to(roomId).emit("peer-screen-share", {
       id: socket.id,
@@ -148,15 +143,16 @@ io.on("connection", (socket) => {
     });
   });
 
-  // ======================
-  // DISCONNECT (FIXED)
-  // ======================
+  // =========================
+  // DISCONNECT (FIXED SAFE)
+  // =========================
   socket.on("disconnect", () => {
 
     const roomId = socket.data.roomId;
     if (!roomId) return;
 
     if (rooms[roomId]) {
+
       delete rooms[roomId][socket.id];
 
       socket.to(roomId).emit("peer-left", {
@@ -170,9 +166,6 @@ io.on("connection", (socket) => {
   });
 });
 
-// ═══════════════════════════════════════════════
-// START
-// ═══════════════════════════════════════════════
 server.listen(PORT, () => {
   console.log(`🚀 Joinly running on port ${PORT}`);
 });
