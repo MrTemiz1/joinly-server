@@ -1,4 +1,4 @@
-const express = require("express");
+ const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
 const path = require("path");
@@ -12,9 +12,6 @@ const io = new Server(server, {
 
 const PORT = process.env.PORT || 3000;
 
-// ======================
-// STATIC FRONTEND
-// ======================
 app.use(express.static(path.join(__dirname, "public")));
 
 app.get("/", (req, res) => {
@@ -31,83 +28,70 @@ const rooms = {};
 // ======================
 io.on("connection", (socket) => {
 
-  // ======================
-  // JOIN ROOM (WAITING SYSTEM)
-  // ======================
   socket.on("join-room", ({ roomId, name, micOn, camOn }) => {
     if (!rooms[roomId]) {
       rooms[roomId] = {
-        users: {},
-        waiting: {}
+        users: {}
       };
     }
 
     const room = rooms[roomId];
+
     socket.join(roomId);
 
-    // waiting list
-    room.waiting[socket.id] = {
+    room.users[socket.id] = {
       id: socket.id,
       name,
       micOn: micOn ?? true,
       camOn: camOn ?? true
     };
 
-    const isHost = Object.keys(room.users).length === 0;
+    // 👑 ilk kişi host
+    const isHost = Object.keys(room.users).length === 1;
 
-    socket.emit("waiting", {
-      message: "Host onayı bekleniyor..."
+    // mevcut peer list
+    const peers = Object.values(room.users).filter(u => u.id !== socket.id);
+
+    // kullanıcıya kendi bilgisi + mevcut kişiler
+    socket.emit("joined", {
+      isHost,
+      peers: peers.map(p => ({
+        id: p.id,
+        name: p.name
+      }))
     });
 
-    socket.to(roomId).emit("waiting-user", {
-      socketId: socket.id,
+    // diğerlerine yeni kişi
+    socket.to(roomId).emit("peer-joined", {
+      id: socket.id,
       name
     });
 
+    // herkesin listesi
+    io.to(roomId).emit("peer-list",
+      Object.values(room.users)
+    );
+
+    // host bilgisi
     if (isHost) {
       socket.emit("you-are-host");
     }
   });
 
   // ======================
-  // ADMIT USER
+  // ADMIT / WAITING (frontend uyum)
   // ======================
-  socket.on("admit-user", ({ roomId, targetId }) => {
-    const room = rooms[roomId];
-    if (!room || !room.waiting[targetId]) return;
-
-    const user = room.waiting[targetId];
-    delete room.waiting[targetId];
-
-    room.users[targetId] = user;
-
+  socket.on("admit-user", ({ roomId, targetId, name }) => {
     io.to(targetId).emit("joined", {
       isHost: false,
-      peers: Object.values(room.users)
-        .filter(u => u.id !== targetId)
-        .map(u => ({
-          id: u.id,
-          name: u.name
-        }))
+      peers: []
     });
-
-    io.to(roomId).emit("peer-list", Object.values(room.users));
   });
 
-  // ======================
-  // DENY USER
-  // ======================
   socket.on("deny-user", ({ roomId, targetId }) => {
-    const room = rooms[roomId];
-    if (!room) return;
-
-    delete room.waiting[targetId];
     io.to(targetId).emit("denied");
   });
 
-  // ======================
-  // LEAVE ROOM
-  // ======================
   socket.on("leave-room", ({ roomId }) => {
     socket.leave(roomId);
   });
@@ -117,10 +101,12 @@ io.on("connection", (socket) => {
   // ======================
   socket.on("media-state", ({ roomId, micOn, camOn }) => {
     const room = rooms[roomId];
-    if (!room?.users?.[socket.id]) return;
+    if (!room) return;
 
-    room.users[socket.id].micOn = micOn;
-    room.users[socket.id].camOn = camOn;
+    if (room.users[socket.id]) {
+      room.users[socket.id].micOn = micOn;
+      room.users[socket.id].camOn = camOn;
+    }
 
     socket.to(roomId).emit("peer-media-state", {
       id: socket.id,
@@ -166,31 +152,25 @@ io.on("connection", (socket) => {
   });
 
   // ======================
-  // DISCONNECT CLEANUP
+  // DISCONNECT
   // ======================
   socket.on("disconnect", () => {
     for (const roomId in rooms) {
       const room = rooms[roomId];
-      if (!room) continue;
 
       if (room.users[socket.id]) {
         delete room.users[socket.id];
-        socket.to(roomId).emit("peer-left", { id: socket.id });
-      }
 
-      if (room.waiting?.[socket.id]) {
-        delete room.waiting[socket.id];
-      }
+        socket.to(roomId).emit("peer-left", {
+          id: socket.id
+        });
 
-      if (
-        Object.keys(room.users).length === 0 &&
-        Object.keys(room.waiting).length === 0
-      ) {
-        delete rooms[roomId];
+        if (Object.keys(room.users).length === 0) {
+          delete rooms[roomId];
+        }
       }
     }
   });
-
 });
 
 server.listen(PORT, () => {
