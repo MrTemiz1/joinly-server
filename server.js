@@ -1,4 +1,4 @@
- // ═══════════════════════════════════════════════
+// ═══════════════════════════════════════════════
 // Joinly Server (Render + Socket.IO + WebRTC)
 // ═══════════════════════════════════════════════
 
@@ -35,13 +35,33 @@ const rooms = {};
 io.on("connection", (socket) => {
   let currentRoom = null;
 
-  // Odaya katıl
-  socket.on("join-room", ({ roomId, name }) => {
-    currentRoom = roomId;
-
-    if (!rooms[roomId]) {
-      rooms[roomId] = { users: {} };
+  // 🆕 ODA OLUŞTUR
+  socket.on("create-room", ({ roomId, name }) => {
+    if (rooms[roomId]) {
+      socket.emit("error", "Room already exists");
+      return;
     }
+
+    rooms[roomId] = { users: {} };
+
+    currentRoom = roomId;
+    rooms[roomId].users[socket.id] = name;
+
+    socket.join(roomId);
+
+    socket.emit("room-created", roomId);
+
+    io.to(roomId).emit("room-users", rooms[roomId].users);
+  });
+
+  // 🚪 ODAYA KATIL
+  socket.on("join-room", ({ roomId, name }) => {
+    if (!rooms[roomId]) {
+      socket.emit("error", "Room not found");
+      return;
+    }
+
+    currentRoom = roomId;
 
     rooms[roomId].users[socket.id] = name;
 
@@ -57,7 +77,7 @@ io.on("connection", (socket) => {
     socket.emit("room-users", rooms[roomId].users);
   });
 
-  // mesaj
+  // 💬 mesaj
   socket.on("message", ({ roomId, msg, name }) => {
     io.to(roomId).emit("message", {
       id: socket.id,
@@ -66,7 +86,7 @@ io.on("connection", (socket) => {
     });
   });
 
-  // WebRTC signal
+  // 🎥 WebRTC signal
   socket.on("offer", ({ to, sdp }) => {
     io.to(to).emit("offer", { from: socket.id, sdp });
   });
@@ -82,7 +102,7 @@ io.on("connection", (socket) => {
     });
   });
 
-  // leave
+  // ❌ disconnect
   socket.on("disconnect", () => {
     if (!currentRoom) return;
 
