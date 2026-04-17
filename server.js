@@ -1,4 +1,4 @@
- const express = require("express");
+const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
 const path = require("path");
@@ -49,12 +49,16 @@ io.on("connection", (socket) => {
     // 👑 ilk kişi host
     const isHost = Object.keys(room.users).length === 1;
 
+    // 🔥 FIX: WebRTC başlatıcı
+    const initiator = Object.keys(room.users).length === 1;
+
     // mevcut peer list
     const peers = Object.values(room.users).filter(u => u.id !== socket.id);
 
     // kullanıcıya kendi bilgisi + mevcut kişiler
     socket.emit("joined", {
       isHost,
+      initiator,   // 🔥 EKLENDİ (kritik fix)
       peers: peers.map(p => ({
         id: p.id,
         name: p.name
@@ -79,7 +83,7 @@ io.on("connection", (socket) => {
   });
 
   // ======================
-  // ADMIT / WAITING (frontend uyum)
+  // ADMIT / WAITING
   // ======================
   socket.on("admit-user", ({ roomId, targetId, name }) => {
     io.to(targetId).emit("joined", {
@@ -171,6 +175,10 @@ io.on("connection", (socket) => {
       }
     }
   });
+});
+
+server.listen(PORT, () => {
+  console.log(`🚀 Joinly server running on ${PORT}`);
 });
 
 server.listen(PORT, () => {
