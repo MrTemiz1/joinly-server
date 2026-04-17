@@ -597,15 +597,22 @@ function goToWaiting() {
   document.getElementById('waiting-avatar').textContent = S.myName.charAt(0).toUpperCase();
   showScreen('waiting');
 
-  connectSocket(() => {
-    S.socket.emit('join-room', { roomId:S.meetingId, name:S.myName, micOn:S.micOn, camOn:S.camOn });
-  });
+  function goToWaiting() {
+  document.getElementById('waiting-mid').textContent = S.meetingId;
+  document.getElementById('waiting-avatar').textContent = S.myName.charAt(0).toUpperCase();
+  showScreen('waiting');
 
-  if (S.isHost) {
-    document.getElementById('waiting-list-host').style.display = 'block';
-    document.getElementById('waiting-status').style.display = 'none';
-    showEnterBtn();
-  }
+  connectSocket(() => {
+    S.socket.emit('join-room', {
+      roomId: S.meetingId,
+      name: S.myName,
+      micOn: S.micOn,
+      camOn: S.camOn
+    });
+
+    // 👇 direkt odaya geç
+    enterRoom();
+  });
 }
 
 function showEnterBtn() {
